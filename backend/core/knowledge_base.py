@@ -47,6 +47,43 @@ class BGEMEmbedder:
                 lambda: _ilu.find_spec("torch.fx") is not None
             )
 
+        # ── 兼容性补丁：FlagEmbedding 1.4.x 的 dtype 关键字 ──────────
+        # FlagEmbedding 1.4.2 的 EncoderOnlyEmbedderM3Runner.get_model()
+        # 用 `dtype=torch_dtype` 调 AutoModel.from_pretrained（runner.py:75），
+        # 但 `dtype` 这个别名自 transformers 4.56.0 才引入。
+        # 当前锁定 4.51.0，未知关键字会被 from_pretrained 透传给模型构造函数，抛：
+        #   TypeError: XLMRobertaModel.__init__() got an unexpected
+        #              keyword argument 'dtype'
+        #
+        # 处理方式：只替换 runner 模块内的 AutoModel 符号，把 dtype 翻译成
+        # torch_dtype 再转发给原方法。作用域限定在该模块，不污染 transformers，
+        # 也不影响 reranker 走的 sentence_transformers 加载路径。
+        # transformers>=4.56 时自动跳过，无需删除此段。
+        import transformers as _tf
+        from packaging.version import Version as _Version
+        if _Version(_tf.__version__) < _Version("4.56.0"):
+            from FlagEmbedding.finetune.embedder.encoder_only.m3 import (
+                runner as _m3_runner,
+            )
+            if not getattr(_m3_runner, "_dtype_compat_installed", False):
+                _orig_from_pretrained = _m3_runner.AutoModel.from_pretrained
+
+                def _from_pretrained_dtype_compat(model_name_or_path, *args, **kwargs):
+                    # 旧版 transformers 只认 torch_dtype，把 dtype 别名翻译过去
+                    if "dtype" in kwargs:
+                        kwargs.setdefault("torch_dtype", kwargs.pop("dtype"))
+                    return _orig_from_pretrained(model_name_or_path, *args, **kwargs)
+
+                class _AutoModelCompat:          # 最小代理，只暴露 from_pretrained
+                    from_pretrained = staticmethod(_from_pretrained_dtype_compat)
+
+                _m3_runner.AutoModel = _AutoModelCompat
+                _m3_runner._dtype_compat_installed = True
+                logger.info(
+                    "bge_m3.dtype_compat_installed | transformers=%s",
+                    _tf.__version__,
+                )
+
         import torch
         from FlagEmbedding import BGEM3FlagModel
 

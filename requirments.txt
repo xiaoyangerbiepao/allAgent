@@ -12,7 +12,11 @@ transformers==4.51.0
 sentence-transformers==3.3.1
 sentencepiece==0.2.1
 torch==2.5.1
-FlagEmbedding>=1.2.0
+# 注意：FlagEmbedding 1.4.x 内部用 dtype= 调 AutoModel.from_pretrained，
+# 该别名需 transformers>=4.56，与本文件锁定的 4.51.0 冲突；
+# backend/core/knowledge_base.py 的 BGEMEmbedder 里已加 dtype→torch_dtype 兼容垫片。
+# 不要改回 >=1.2.0 这类无上限写法，否则换机器重装会再次踩到同类不兼容。
+FlagEmbedding==1.4.2
 
 # ===== Web 框架 =====
 fastapi==0.117.1
