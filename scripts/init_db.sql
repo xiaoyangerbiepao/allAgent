@@ -217,6 +217,50 @@ CREATE INDEX idx_qa_sessions_student_id ON qa_sessions (student_id);
 CREATE INDEX idx_qa_sessions_thread_id ON qa_sessions (thread_id);
 
 -- ============================================================
+-- 大模型配置表（前端可切换模型）
+-- 密钥不入库，只记录“该厂商的 Key 从哪个环境变量读”
+-- ============================================================
+CREATE TABLE IF NOT EXISTS llm_providers (
+    id               VARCHAR(32) PRIMARY KEY,
+    display_name     VARCHAR(64)  NOT NULL,
+    base_url         VARCHAR(256) NOT NULL,
+    api_key_env      VARCHAR(64)  NOT NULL,
+    thinking_payload JSONB,
+    is_enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order       INT NOT NULL DEFAULT 0,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS llm_models (
+    provider_id    VARCHAR(32)  NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
+    model_id       VARCHAR(128) NOT NULL,
+    display_name   VARCHAR(128) NOT NULL,
+    tier           VARCHAR(16)  NOT NULL DEFAULT 'pro'
+                   CHECK (tier IN ('flash', 'pro')),
+    context_window INT,
+    supports_tools BOOLEAN NOT NULL DEFAULT FALSE,
+    status         VARCHAR(16)  NOT NULL DEFAULT 'unknown'
+                   CHECK (status IN ('available', 'not_activated', 'error', 'unknown')),
+    status_detail  TEXT,
+    last_checked   TIMESTAMPTZ,
+    is_selectable  BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order     INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (provider_id, model_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_bindings (
+    agent_type  VARCHAR(32) PRIMARY KEY,
+    provider_id VARCHAR(32) NOT NULL,
+    model_id    VARCHAR(128) NOT NULL,
+    temperature NUMERIC(3,2) NOT NULL DEFAULT 0,
+    updated_by  UUID,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 种子数据（厂商 / 每家的 flash + pro 两个模型 / 默认绑定）由
+-- backend/db/migrations.py 的 seed.llm_providers 等条目幂等写入，这里不重复。
+
+-- ============================================================
 -- 自动更新 updated_at 触发器
 -- ============================================================
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -235,7 +279,7 @@ BEGIN
         'users',
         'exams', 'exam_submissions', 'exam_reviews',
         'resume_reviews', 'interview_sessions',
-        'interview_questions', 'qa_sessions'
+        'interview_questions', 'qa_sessions', 'llm_providers'
     ]
     LOOP
         EXECUTE format('

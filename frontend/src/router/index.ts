@@ -82,6 +82,13 @@ const router = createRouter({
           component: () => import('@/views/teacher/KnowledgePendingView.vue'),
           meta: { requiresTeacher: true },
         },
+        // 模型配置（每个业务自由切换厂商与模型，需要 teacher/admin 角色）
+        {
+          path: 'settings/models',
+          name: 'settings-models',
+          component: () => import('@/views/settings/ModelSettingsView.vue'),
+          meta: { requiresTeacher: true },
+        },
       ],
     },
     {

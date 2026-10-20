@@ -40,6 +40,10 @@
           <el-icon><Collection /></el-icon>
           <span>知识库待补充</span>
         </RouterLink>
+        <RouterLink to="/settings/models" class="nav-item" :class="{ 'nav-item--active': isActive('/settings/models') }">
+          <el-icon><Setting /></el-icon>
+          <span>模型配置</span>
+        </RouterLink>
       </template>
     </nav>
   </div>
@@ -49,7 +53,7 @@
 import { useRoute } from 'vue-router'
 import {
   House, ChatDotRound, Document, Postcard,
-  Microphone, EditPen, Collection,
+  Microphone, EditPen, Collection, Setting,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 

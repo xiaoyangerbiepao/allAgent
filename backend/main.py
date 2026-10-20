@@ -43,7 +43,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("app.migrations_failed | error=%s", e)   # 迁移失败只告警，不拦启动
 
-    # ② 并行预热三个本地模型（首次加载慢，提前热好，避免首个请求卡顿）
+    # ② 加载大模型配置快照（前端可切换模型，见 /api/v1/llm/catalog）
+    #    必须在模型预热之前：预热时 get_llm 要按快照解析厂商与模型
+    try:
+        from backend.core.llm_config_store import store as llm_config_store
+        await llm_config_store.reload()
+    except Exception as e:
+        logger.warning("app.llm_config_load_failed | error=%s", e)
+
+    # ③ 并行预热三个本地模型（首次加载慢，提前热好，避免首个请求卡顿）
     import asyncio
     try:
         from backend.core.reranker import BGEReranker            # 重排序模型（5.8）
@@ -60,7 +68,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("app.local_models_warmup_failed | error=%s", e)  # 预热失败也不拦启动
 
-    # ③ 驱动 MCP Server 的 lifespan（mount 不会自动调用子应用的 lifespan，需手动嵌套进入）
+    # ④ 驱动 MCP Server 的 lifespan（mount 不会自动调用子应用的 lifespan，需手动嵌套进入）
     async with _kb_app.router.lifespan_context(_kb_app):
         async with _ws_app.router.lifespan_context(_ws_app):
             logger.info("app.started")

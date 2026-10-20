@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     deepseek_model_chat: str = "deepseek-chat"              # 对话模型名
     deepseek_model_coder: str = "deepseek-coder"            # 代码模型名
 
+    # ── 其它大模型厂商（前端可切换，见 /api/v1/llm/catalog）──
+    # 只放密钥；接口地址与模型清单存在 llm_providers / llm_models 表里，
+    # 这样新增厂商不用改代码，只需加一组 Key 并在表里插一条记录。
+    # 留空 = 该厂商不可用，前端会把它标灰。
+    xiaomi_api_key: str = ""                                # 小米 MiMo
+    bailian_api_key: str = ""                               # 阿里百炼（专属 MaaS 端点）
+
     # ── 本地模型权重路径 ──
     reranker_model_path: str = "./models/reranker/bge-reranker-large"    # 精排模型
     classifier_model_path: str = "./models/classifier/all-MiniLM-L6-v2"  # 意图分类模型
