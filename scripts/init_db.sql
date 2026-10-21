@@ -249,16 +249,25 @@ CREATE TABLE IF NOT EXISTS llm_models (
 );
 
 CREATE TABLE IF NOT EXISTS llm_bindings (
-    agent_type  VARCHAR(32) PRIMARY KEY,
-    provider_id VARCHAR(32) NOT NULL,
-    model_id    VARCHAR(128) NOT NULL,
-    temperature NUMERIC(3,2) NOT NULL DEFAULT 0,
-    updated_by  UUID,
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    agent_type       VARCHAR(32) PRIMARY KEY,
+    provider_id      VARCHAR(32) NOT NULL,
+    model_id         VARCHAR(128) NOT NULL,
+    temperature      NUMERIC(3,2) NOT NULL DEFAULT 0,
+    -- 主模型不可用时是否自动切到备选（llm_router.build_chain 读这个开关）
+    failover_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_by       UUID,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 种子数据（厂商 / 每家的 flash + pro 两个模型 / 默认绑定）由
--- backend/db/migrations.py 的 seed.llm_providers 等条目幂等写入，这里不重复。
+-- 存量库补列（与 backend/db/migrations.py 里的同名条目保持一致）
+ALTER TABLE llm_bindings
+    ADD COLUMN IF NOT EXISTS failover_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- 种子数据（3 家厂商 / 每家 flash + pro 两个模型 / 7 条默认绑定）不写在这里。
+-- 全新环境请在本脚本之后，再执行一次独立的迁移脚本（幂等，可重复跑）：
+--     psql "连接串" -f scripts/migrations/2026-10-20_01_llm_model_config.sql
+-- 该脚本同时负责给存量库补 failover_enabled 列。
+-- 应用启动时 backend/db/migrations.py 也会自动执行同样的变更，两条路等效。
 
 -- ============================================================
 -- 自动更新 updated_at 触发器

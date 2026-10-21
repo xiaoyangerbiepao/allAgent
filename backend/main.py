@@ -52,6 +52,8 @@ async def lifespan(app: FastAPI):
         logger.warning("app.llm_config_load_failed | error=%s", e)
 
     # ③ 并行预热三个本地模型（首次加载慢，提前热好，避免首个请求卡顿）
+    #    return_exceptions=True 很重要：否则第一个失败会把另外两个的成功信息一起吞掉，
+    #    启动日志只剩一句 warning，排查时根本不知道是谁挂了（这次踩过）。
     import asyncio
     try:
         from backend.core.reranker import BGEReranker            # 重排序模型（5.8）
@@ -59,12 +61,27 @@ async def lifespan(app: FastAPI):
         from backend.core.knowledge_base import BGEMEmbedder      # BGE-M3 嵌入（5.4）
 
         loop = asyncio.get_running_loop()
-        await asyncio.gather(                                    # 三个模型并行加载（各跑在线程池里）
-            loop.run_in_executor(None, BGEReranker.get_instance),
-            loop.run_in_executor(None, QueryClassifier.get_instance),
-            loop.run_in_executor(None, BGEMEmbedder.get_instance),
+        warmup_tasks = {
+            "reranker":         BGEReranker.get_instance,
+            "query_classifier": QueryClassifier.get_instance,
+            "bge_m3":           BGEMEmbedder.get_instance,
+        }
+        names = list(warmup_tasks)
+        results = await asyncio.gather(
+            *(loop.run_in_executor(None, fn) for fn in warmup_tasks.values()),
+            return_exceptions=True,
         )
-        logger.info("app.local_models_warmed_up")
+        failed = []
+        for name, result in zip(names, results):
+            if isinstance(result, BaseException):
+                failed.append(name)
+                logger.warning("app.warmup_failed | model=%s error=%s", name, result)
+            else:
+                logger.info("app.warmup_ok | model=%s", name)
+        if failed:
+            logger.warning("app.local_models_partially_warmed | failed=%s", ",".join(failed))
+        else:
+            logger.info("app.local_models_warmed_up")
     except Exception as e:
         logger.warning("app.local_models_warmup_failed | error=%s", e)  # 预热失败也不拦启动
 

@@ -165,10 +165,17 @@ async def chat_stream(
                             confidence = _conf
 
         except Exception as e:
-            logger.error("chat_stream.error", error=str(e), exc_info=True)
+            # 到这里说明「首 token 之后」才出事：langchain 的 fallback 链只在产出第一个
+            # token 之前能换模型（见 runnables/fallbacks.py 的 astream 实现），所以这里
+            # 不再自动重跑——重跑会把已经吐给用户的字重画一遍。改为明确告知可重试。
+            logger.error("chat_stream.error", error=str(e), error_type=type(e).__name__, exc_info=True)
             yield {
                 "data": json.dumps(
-                    {"type": "error", "message": "流式输出异常，请使用普通接口重试"},
+                    {
+                        "type": "error",
+                        "message": "回答中断（模型服务异常），已生成的内容可能不完整，请重新发送",
+                        "retryable": True,
+                    },
                     ensure_ascii=False,
                 )
             }

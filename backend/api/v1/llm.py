@@ -20,8 +20,10 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from backend.core import llm_health
 from backend.core.llm_config_store import AGENT_LABELS, store
 from backend.core.llm_factory import LLMFactory
+from backend.core.llm_router import NO_CROSS_PROVIDER_AGENTS, describe_chain
 from backend.core.logger import get_logger
 from backend.dependencies import get_current_user
 
@@ -40,6 +42,23 @@ def _require_operator(user: dict) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="只有教师或管理员可以修改模型配置",
         )
+
+
+def _health_snapshot() -> dict[str, Any]:
+    """所有厂商的健康状态。没出过故障的厂商也补成 closed，
+    否则前端拿到空对象就没法区分「正常」和「字段没下发」。"""
+    snapshot = llm_health.health.snapshot()
+    for provider_id in store.providers:
+        snapshot.setdefault(provider_id, {
+            "state": "closed",
+            "consecutive_failures": 0,
+            "total_failures": 0,
+            "cooldown_remaining": 0.0,
+            "last_error": "",
+            "last_failure_at": None,
+            "last_success_at": None,
+        })
+    return snapshot
 
 
 async def _probe_model(
@@ -130,13 +149,23 @@ async def _probe_model(
 # ──────────────────────────────────────────────────────────────
 # GET /llm/catalog
 # ──────────────────────────────────────────────────────────────
-@router.get("/catalog", summary="厂商 / 可选模型 / 当前绑定")
+@router.get("/catalog", summary="厂商 / 可选模型 / 当前绑定 / 切换链 / 健康状态")
 async def get_catalog(user: dict = Depends(get_current_user)) -> dict[str, Any]:
     """前端设置页只调这一个接口就能渲染完整界面。"""
     if not store.loaded:
         await store.reload()          # 启动时若 DB 未就绪，首次访问再补一次
 
     catalog = store.build_catalog()
+
+    # 每个业务的「主 → 备」链：前端据此展示「DeepSeek 挂了会切到谁」。
+    # 结构化输出的业务（批改/简历/面试）要求候选支持 tools，链会随之不同。
+    for agent in catalog["agents"]:
+        require_tools = agent["agent_type"] not in ("qa", "intent", "summarize")
+        agent["chain"] = describe_chain(agent["agent_type"], require_tools=require_tools)
+        # 批改类不做跨厂商切换：这是评分一致性的红线，前端要能看到原因
+        agent["cross_provider_allowed"] = agent["agent_type"] not in NO_CROSS_PROVIDER_AGENTS
+
+    catalog["health"] = _health_snapshot()
     catalog["agent_labels"] = AGENT_LABELS
     return catalog
 
@@ -148,6 +177,9 @@ class BindingUpdate(BaseModel):
     provider_id: str = Field(..., description="厂商 id，如 xiaomi")
     model_id: str = Field(..., description="模型 id，如 mimo-v2.6-pro")
     temperature: Optional[float] = Field(None, ge=0, le=2, description="留空则沿用原温度")
+    failover_enabled: Optional[bool] = Field(
+        None, description="主模型不可用时是否自动切备选；留空则沿用原设置"
+    )
 
 
 @router.put("/bindings/{agent_type}", summary="修改某个业务的模型绑定")
@@ -189,6 +221,7 @@ async def update_binding(
         model_id=payload.model_id,
         temperature=temperature,
         updated_by=user.get("user_id"),
+        failover_enabled=payload.failover_enabled,
     )
 
     # 关键一步：不清缓存的话，旧模型实例还在内存里，用户会以为「切了没生效」
@@ -199,6 +232,7 @@ async def update_binding(
         agent_type=agent_type,
         provider=payload.provider_id,
         model=payload.model_id,
+        failover=binding.failover_enabled,
         operator=user.get("user_id"),
     )
     return {
@@ -208,7 +242,9 @@ async def update_binding(
             "provider_id": binding.provider_id,
             "model_id": binding.model_id,
             "temperature": binding.temperature,
+            "failover_enabled": binding.failover_enabled,
         },
+        "chain": describe_chain(agent_type, require_tools=agent_type not in ("qa", "intent", "summarize")),
     }
 
 
@@ -277,8 +313,42 @@ async def sync_models(user: dict = Depends(get_current_user)) -> dict[str, Any]:
         })
 
     await store.reload()          # 把新状态刷进内存快照
+
+    # 探测通过 = 该厂商当前确实活着，顺手把熔断解除，避免「明明好了还被跳过 60 秒」
+    recovered = {r["provider_id"] for r in results if r["status"] == "available"}
+    for provider_id in recovered:
+        llm_health.health.record_success(provider_id)
+
     LLMFactory.clear_cache()      # 状态变了，实例也重建一次，避免用到坏配置
 
     available = sum(1 for r in results if r["status"] == "available")
     logger.info("llm_api.sync_done", total=len(results), available=available)
     return {"ok": True, "total": len(results), "available": available, "results": results}
+
+
+# ──────────────────────────────────────────────────────────────
+# GET /llm/health — 厂商熔断状态
+# ──────────────────────────────────────────────────────────────
+@router.get("/health", summary="各厂商熔断状态")
+async def get_health(user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """只读：谁在熔断、还剩几秒、最后一次失败原因。"""
+    return {
+        "health": _health_snapshot(),
+        "generation": llm_health.health.generation,
+        "threshold": llm_health.FAILURE_THRESHOLD,
+        "cooldown_seconds": llm_health.COOLDOWN_SECONDS,
+    }
+
+
+# ──────────────────────────────────────────────────────────────
+# POST /llm/health/reset — 手工解除熔断
+# ──────────────────────────────────────────────────────────────
+@router.post("/health/reset", summary="手工解除熔断（修好密钥/网络后用）")
+async def reset_health(
+    provider_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    _require_operator(user)
+    llm_health.health.reset(provider_id)
+    LLMFactory.clear_cache()      # 链里可能还缺着刚恢复的厂商，重建一次
+    return {"ok": True, "health": _health_snapshot()}

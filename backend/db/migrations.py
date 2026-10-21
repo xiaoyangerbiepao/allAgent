@@ -129,6 +129,13 @@ _MIGRATIONS: list[tuple[str, str]] = [
         ON CONFLICT (provider_id, model_id) DO NOTHING
         """,
     ),
+    # 自动切换开关：主模型不可用时是否允许切到备选（见 llm_router.build_chain）
+    # 存量库用 ADD COLUMN IF NOT EXISTS 补列，默认 TRUE = 保持「有备就切」的行为
+    (
+        "llm_bindings.failover_enabled",
+        "ALTER TABLE llm_bindings "
+        "ADD COLUMN IF NOT EXISTS failover_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    ),
     # 默认全部指向 DeepSeek：与改造前的行为保持一致，前端改动不影响存量调用
     (
         "seed.llm_bindings",

@@ -4,6 +4,12 @@
       <template #header>
         <span>模型配置</span>
         <div class="header-actions">
+          <el-tag v-if="openProviders.length" type="danger" size="small">
+            {{ openProviders.map(p => p.display_name).join('、') }} 熔断中
+          </el-tag>
+          <el-button v-if="openProviders.length" size="small" @click="handleResetHealth">
+            解除熔断
+          </el-button>
           <el-tag v-if="catalog" size="small" :type="catalog.loaded_from_db ? 'success' : 'warning'">
             {{ catalog.loaded_from_db ? '配置已从数据库加载' : '数据库未就绪，当前为默认值' }}
           </el-tag>
@@ -15,6 +21,7 @@
 
       <el-alert type="info" :closable="false" show-icon class="tip">
         每个业务可以单独选模型：<b>flash</b> 省钱快、<b>pro</b> 擅长推理。保存后立即生效，无需重启服务。
+        主模型不可用时，会自动切到<b>同档位</b>的其他厂商（不会拿 flash 顶 pro）。
         密钥只存在于后端 <code>.env.local</code>，不会下发到浏览器。
       </el-alert>
 
@@ -48,7 +55,8 @@
                   :disabled="!p.enabled"
                 >
                   <span>{{ p.display_name }}</span>
-                  <span v-if="!p.has_key" class="opt-hint">未配置密钥</span>
+                  <span v-if="providerHealth(p.id)?.state === 'open'" class="opt-bad">熔断中</span>
+                  <span v-else-if="!p.has_key" class="opt-hint">未配置密钥</span>
                 </el-option>
               </el-select>
             </el-form-item>
@@ -91,6 +99,31 @@
                 show-input
                 style="max-width: 420px"
               />
+            </el-form-item>
+
+            <el-form-item label="自动切换">
+              <el-switch v-model="form.failoverEnabled" />
+              <span class="switch-hint">
+                {{ form.failoverEnabled ? '主模型失败时自动切到下一个' : '只用主模型，失败即报错' }}
+              </span>
+            </el-form-item>
+
+            <el-form-item label="切换顺序">
+              <div class="chain">
+                <template v-for="(c, i) in displayChain" :key="`${c.provider_id}/${c.model_id}`">
+                  <span v-if="i > 0" class="chain-arrow">→</span>
+                  <span class="chain-item" :class="{ 'chain-item--down': !c.healthy }">
+                    <i class="dot" :class="c.healthy ? 'dot--ok' : 'dot--down'"></i>
+                    <span class="chain-name">{{ c.display_name }}</span>
+                    <em v-if="c.is_primary" class="chain-badge">主</em>
+                    <em v-if="!c.healthy" class="chain-badge chain-badge--down">
+                      熔断 {{ cooldownOf(c.provider_id) }}s
+                    </em>
+                  </span>
+                </template>
+                <span v-if="!displayChain.length" class="chain-empty">未配置</span>
+              </div>
+              <div class="chain-note">{{ chainNote }}</div>
             </el-form-item>
 
             <el-form-item>
@@ -136,13 +169,17 @@ import { ElMessage, ElNotification } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import {
   fetchCatalog,
+  resetHealth,
   syncModels,
   testModel,
   updateBinding,
   type LlmAgent,
   type LlmBinding,
   type LlmCatalog,
+  type LlmChainEntry,
   type LlmModel,
+  type LlmProvider,
+  type ProviderHealth,
   type TestModelResponse,
 } from '@/api/llm'
 
@@ -159,6 +196,7 @@ const form = reactive({
   providerId: '',
   modelId: '',
   temperature: 0,
+  failoverEnabled: true,
 })
 
 /** 当前厂商下可选的模型 */
@@ -167,6 +205,35 @@ const currentModels = computed<LlmModel[]>(() => {
   return provider?.models ?? []
 })
 
+/** 展示用的切换链：关掉自动切换时只显示主模型，避免与实际行为不符 */
+const displayChain = computed<LlmChainEntry[]>(() => {
+  const chain = current.value?.chain ?? []
+  return form.failoverEnabled ? chain : chain.slice(0, 1)
+})
+
+const chainNote = computed(() => {
+  if (!form.failoverEnabled) return '已关闭自动切换：主模型失败会直接报错'
+  if (current.value && !current.value.cross_provider_allowed) {
+    return '批改类只在本厂商内切换：换模型会改变评分口径，宁可转人工复核'
+  }
+  if (dirty.value) return '保存后按新配置重新生成顺序'
+  return '仅同档位兜底，不会拿省钱款顶推理款'
+})
+
+/** 处于熔断的厂商（冷却期内会被跳过） */
+const openProviders = computed<LlmProvider[]>(() => {
+  const list = catalog.value?.providers ?? []
+  return list.filter(p => providerHealth(p.id)?.state === 'open')
+})
+
+function providerHealth(providerId: string): ProviderHealth | undefined {
+  return catalog.value?.health?.[providerId]
+}
+
+function cooldownOf(providerId: string): number {
+  return Math.ceil(providerHealth(providerId)?.cooldown_remaining ?? 0)
+}
+
 /** 与后端保存值是否有差异（用于置灰保存按钮） */
 const dirty = computed(() => {
   const b = current.value?.binding
@@ -174,6 +241,7 @@ const dirty = computed(() => {
   return (
     b.provider_id !== form.providerId ||
     b.model_id !== form.modelId ||
+    b.failover_enabled !== form.failoverEnabled ||
     Math.abs(b.temperature - form.temperature) > 1e-6
   )
 })
@@ -227,6 +295,7 @@ function resetForm() {
   form.providerId = binding?.provider_id ?? catalog.value?.providers.find(p => p.enabled)?.id ?? ''
   form.modelId = binding?.model_id ?? ''
   form.temperature = binding?.temperature ?? 0
+  form.failoverEnabled = binding?.failover_enabled ?? true
   if (!form.modelId) pickDefaultModel()
   testResult.value = null
 }
@@ -264,6 +333,7 @@ async function handleSave() {
       provider_id: form.providerId,
       model_id: form.modelId,
       temperature: form.temperature,
+      failover_enabled: form.failoverEnabled,
     })
     ElMessage.success(`已切换：${current.value.label} → ${selectedModelLabel.value}`)
     await loadCatalog(true)
@@ -300,6 +370,16 @@ async function handleSync() {
     // 拦截器已提示
   } finally {
     syncing.value = false
+  }
+}
+
+async function handleResetHealth() {
+  try {
+    await resetHealth()
+    await loadCatalog(true)
+    ElMessage.success('已解除熔断，下一次请求会重新尝试该厂商')
+  } catch {
+    // 拦截器已提示
   }
 }
 
@@ -428,6 +508,92 @@ onMounted(() => loadCatalog())
   float: right;
   font-size: 12px;
   color: #a8abb2;
+}
+
+.opt-bad {
+  float: right;
+  font-size: 12px;
+  color: #d4380d;
+}
+
+.switch-hint {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #8a919f;
+}
+
+.chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chain-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1f2329;
+  background-color: #fafbfc;
+}
+
+.chain-item--down {
+  border-color: #f7c1c1;
+  background-color: #fdf2f2;
+  color: #a32d2d;
+}
+
+.chain-arrow {
+  color: #c0c4cc;
+  font-size: 13px;
+}
+
+.chain-name {
+  line-height: 1.2;
+}
+
+.chain-badge {
+  font-style: normal;
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: #1677ff;
+  background-color: #e8f1ff;
+}
+
+.chain-badge--down {
+  color: #a32d2d;
+  background-color: #fbe4e4;
+}
+
+.chain-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #8a919f;
+}
+
+.chain-empty {
+  font-size: 13px;
+  color: #a8abb2;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot--ok {
+  background-color: #52c41a;
+}
+
+.dot--down {
+  background-color: #e24b4a;
 }
 
 .dirty-hint {

@@ -82,6 +82,8 @@ class LlmBinding:
     provider_id: str
     model_id: str
     temperature: float = 0.0
+    # 主模型不可用时是否允许自动切换到备选（见 llm_router.build_chain）
+    failover_enabled: bool = True
 
     @property
     def label(self) -> str:
@@ -172,7 +174,8 @@ class LlmConfigStore:
                 ))).mappings().all()
 
                 b_rows = (await session.execute(text(
-                    "SELECT agent_type, provider_id, model_id, temperature FROM llm_bindings"
+                    "SELECT agent_type, provider_id, model_id, temperature, failover_enabled "
+                    "FROM llm_bindings"
                 ))).mappings().all()
 
             if p_rows:
@@ -208,6 +211,10 @@ class LlmConfigStore:
                         provider_id=r["provider_id"],
                         model_id=r["model_id"],
                         temperature=float(r["temperature"]),
+                        # 列可能因迁移未跑而为 None，按「开启」处理（与默认行为一致）
+                        failover_enabled=(
+                            True if r["failover_enabled"] is None else bool(r["failover_enabled"])
+                        ),
                     )
                     for r in b_rows
                 }
@@ -232,28 +239,36 @@ class LlmConfigStore:
         model_id: str,
         temperature: float,
         updated_by: Optional[str] = None,
+        failover_enabled: Optional[bool] = None,
     ) -> LlmBinding:
-        """UPSERT 一条绑定，然后刷新内存快照。调用方负责清 LLMFactory 缓存。"""
+        """UPSERT 一条绑定，然后刷新内存快照。调用方负责清 LLMFactory 缓存。
+
+        failover_enabled 传 None 表示「不改这一项」，用 COALESCE 在 SQL 里保留原值。
+        """
         from backend.dependencies import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
             await session.execute(
                 text(
                     "INSERT INTO llm_bindings "
-                    "  (agent_type, provider_id, model_id, temperature, updated_by, updated_at) "
-                    "VALUES (:agent_type, :provider_id, :model_id, :temperature, :updated_by, NOW()) "
+                    "  (agent_type, provider_id, model_id, temperature, failover_enabled, "
+                    "   updated_by, updated_at) "
+                    "VALUES (:agent_type, :provider_id, :model_id, :temperature, "
+                    "        COALESCE(:failover_enabled, TRUE), :updated_by, NOW()) "
                     "ON CONFLICT (agent_type) DO UPDATE SET "
-                    "  provider_id = EXCLUDED.provider_id, "
-                    "  model_id    = EXCLUDED.model_id, "
-                    "  temperature = EXCLUDED.temperature, "
-                    "  updated_by  = EXCLUDED.updated_by, "
-                    "  updated_at  = NOW()"
+                    "  provider_id      = EXCLUDED.provider_id, "
+                    "  model_id         = EXCLUDED.model_id, "
+                    "  temperature      = EXCLUDED.temperature, "
+                    "  failover_enabled = COALESCE(:failover_enabled, llm_bindings.failover_enabled), "
+                    "  updated_by       = EXCLUDED.updated_by, "
+                    "  updated_at       = NOW()"
                 ),
                 {
                     "agent_type": agent_type,
                     "provider_id": provider_id,
                     "model_id": model_id,
                     "temperature": Decimal(str(round(float(temperature), 2))),
+                    "failover_enabled": failover_enabled,
                     "updated_by": updated_by,
                 },
             )
@@ -350,6 +365,7 @@ class LlmConfigStore:
                         "provider_id": binding.provider_id,
                         "model_id": binding.model_id,
                         "temperature": binding.temperature,
+                        "failover_enabled": binding.failover_enabled,
                     }
                     if (binding := self.bindings.get(agent_type))
                     else None

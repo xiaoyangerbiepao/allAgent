@@ -197,12 +197,22 @@ class Orchestrator:
 
         result_state = await _invoke()                   # 执行（失败时 with_retry 自动处理）
         # print(f'result_state66666 = {result_state}')
-        # 从最终 State 提取响应内容：取最后一条消息的文本
-        last_message = result_state["messages"][-1]
-        content = last_message.text if hasattr(last_message, "text") else str(last_message.content)
+        # 从最终 State 提取响应内容：优先取最后一条消息。
+        # 注意：走降级/系统兜底时，result_state 可能不带 messages（历史上就因此抛过
+        # KeyError，被外层 except 吞成「系统处理请求时遇到问题」），所以这里两种结构都要认。
+        messages = result_state.get("messages") or []
+        if messages:
+            last_message = messages[-1]
+            content = (
+                last_message.text
+                if hasattr(last_message, "text")
+                else str(last_message.content)
+            )
+        else:
+            content = result_state.get("content", "服务暂时不可用，请稍后再试。")
 
         return AgentResponse(
-            success=True,
+            success=not result_state.get("system_fallback", False),
             agent_type=request.agent_type,
             content=content,                             # 主文本响应
             structured=result_state.get("structured_output"),   # 结构化数据（报告/评分，若有）
