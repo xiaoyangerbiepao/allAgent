@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     # ── Web 搜索（Tavily 可选；留空则自动用免费的 DuckDuckGo）──
     tavily_api_key: str = ""
 
+    # ── LangSmith 链路追踪（可选）──
+    # 打开后 LangChain 会把每次 LLM / Retriever / Agent 调用上报到 LangSmith，
+    # 业务代码不用改一行。密钥只放 .env.local，代码里不硬编码。
+    langsmith_tracing: bool = False                                     # 总开关
+    langsmith_api_key: str = ""                                          # lsv2_pt_xxx
+    langsmith_project: str = "eduagent"                                  # 控制台里的项目名
+    langsmith_endpoint: str = "https://api.smith.langchain.com"          # 欧盟区账号要改成 eu.api.smith.langchain.com
+    langsmith_sampling_rate: float = 1.0                                 # 采样率 0~1：1=全量上报，0.1=只报 10%（含合同原文的场景建议调低）
+
     # ── 应用基础配置 ──
     app_env: str = "local"                     # 运行环境标识
     app_debug: bool = False                    # 是否调试模式

@@ -36,9 +36,9 @@
           <el-icon><EditPen /></el-icon>
           <span>批改确认</span>
         </RouterLink>
-        <RouterLink to="/teacher/knowledge-pending" class="nav-item" :class="{ 'nav-item--active': isActive('/teacher/knowledge-pending') }">
+        <RouterLink to="/teacher/knowledge" class="nav-item" :class="{ 'nav-item--active': isActive('/teacher/knowledge') }">
           <el-icon><Collection /></el-icon>
-          <span>知识库待补充</span>
+          <span>知识库管理</span>
         </RouterLink>
         <RouterLink to="/settings/models" class="nav-item" :class="{ 'nav-item--active': isActive('/settings/models') }">
           <el-icon><Setting /></el-icon>

@@ -3,14 +3,15 @@
 import os
 import sys
 
-# Windows conda 专用：把 base 的 Library/bin 加入 DLL 搜索路径，
-# 让 _lzma.pyd 能找到 liblzma.dll（非 Windows 跳过，不影响 Linux/Mac）
+# Windows conda 专用：把「当前环境自己」的 Library/bin 加入 DLL 搜索路径，
+# 让 _lzma.pyd 能找到 liblzma.dll（非 Windows 跳过，不影响 Linux/Mac）。
+# 注意：不能指向 base 的 Library/bin —— base 与 env 的 libssl-3-x64.dll 版本不一致，
+# 会把 _ssl 拖挂（实测：加 base 目录后 import uvicorn 报 "DLL load failed while
+# importing _ssl"）；agentStudy 环境自带 liblzma.dll，指自己即可。
 if sys.platform == "win32":
-    _conda_base_lib_bin = os.path.normpath(
-        os.path.join(os.path.dirname(sys.executable), "..", "..", "Library", "bin")
-    )
-    if os.path.isdir(_conda_base_lib_bin):
-        os.add_dll_directory(_conda_base_lib_bin)
+    _env_lib_bin = os.path.join(sys.prefix, "Library", "bin")
+    if os.path.isdir(_env_lib_bin):
+        os.add_dll_directory(_env_lib_bin)
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -21,6 +22,11 @@ from backend.core.logger import configure_logging, get_logger    # 日志（3.3�
 from backend.api.router import api_router                        # 8.6.1 聚合的总路由
 
 settings = get_settings()
+
+# LangSmith 链路追踪：必须在任何 LLM 调用之前完成环境变量注入。
+# 放在模块级（而不是 lifespan 里），是为了让 import 阶段就构造出来的模型/链也能被采集。
+from backend.core.observability import init_langsmith_tracing  # noqa: E402
+init_langsmith_tracing(settings)
 
 # MCP Sub-Apps（第 5.11 章实现）在 lifespan 定义前创建，
 # 这样 lifespan 与下面的 mount 共享同一实例

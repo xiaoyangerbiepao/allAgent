@@ -76,10 +76,11 @@ const router = createRouter({
           component: () => import('@/views/teacher/ExamReviewView.vue'),
           meta: { requiresTeacher: true },
         },
+        // 知识库管理（上传文档 → 向量化入库 Milvus，需要 teacher/admin 角色）
         {
-          path: 'teacher/knowledge-pending',
-          name: 'teacher-knowledge-pending',
-          component: () => import('@/views/teacher/KnowledgePendingView.vue'),
+          path: 'teacher/knowledge',
+          name: 'teacher-knowledge',
+          component: () => import('@/views/teacher/KnowledgeBaseView.vue'),
           meta: { requiresTeacher: true },
         },
         // 模型配置（每个业务自由切换厂商与模型，需要 teacher/admin 角色）

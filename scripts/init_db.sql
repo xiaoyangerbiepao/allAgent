@@ -270,6 +270,30 @@ ALTER TABLE llm_bindings
 -- 应用启动时 backend/db/migrations.py 也会自动执行同样的变更，两条路等效。
 
 -- ============================================================
+-- 知识库文档登记表（前端上传 → RAG 入库）
+-- id 同时就是 Milvus 侧的 document_id；chunk 本体在 Milvus（knowledge_domain），
+-- 这张表只登记「上传过哪些文档、处理到什么状态」，用于列表展示与删除联动。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS kb_documents (
+    id           UUID PRIMARY KEY,
+    filename     VARCHAR(500) NOT NULL,
+    course_id    VARCHAR(64),
+    tenant_id    VARCHAR(64)  NOT NULL DEFAULT 'tenant_default',
+    size_bytes   BIGINT       NOT NULL DEFAULT 0,
+    chunk_count  INTEGER      NOT NULL DEFAULT 0,
+    use_context  BOOLEAN      NOT NULL DEFAULT FALSE,
+    status       VARCHAR(16)  NOT NULL DEFAULT 'processing'
+                 CHECK (status IN ('processing', 'completed', 'failed')),
+    error_msg    TEXT,
+    uploaded_by  VARCHAR(64),
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    finished_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_documents_tenant_created
+    ON kb_documents (tenant_id, created_at DESC);
+
+-- ============================================================
 -- 自动更新 updated_at 触发器
 -- ============================================================
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -288,7 +312,8 @@ BEGIN
         'users',
         'exams', 'exam_submissions', 'exam_reviews',
         'resume_reviews', 'interview_sessions',
-        'interview_questions', 'qa_sessions', 'llm_providers'
+        'interview_questions', 'qa_sessions', 'llm_providers',
+        'kb_documents'
     ]
     LOOP
         EXECUTE format('

@@ -1,10 +1,10 @@
-# ===== 大模型文�? =====
+# ===== 大模型文�? =====
 backend/models/
 
-# ===== 涉及 API Key 的文�? =====
+# ===== 涉及 API Key 的文�? =====
 .env.local
 frontend/.env.local
-# 以下文件硬编码了真实 API Key，禁止上�?
+# 以下文件硬编码了真实 API Key，禁止上�?
 review/demo3_langchain.py
 review/demo_stuctured.py
 
@@ -24,7 +24,7 @@ venv/
 .DS_Store
 *.log
 
-# ===== 数据�? / 临时文件 =====
+# ===== 数据�? / 临时文件 =====
 *.db
 *.sqlite3
 
@@ -34,3 +34,5 @@ venv/
 # temp scan files
 _scan_*.txt
 _gitlog.txt
+node_modules/
+dist/

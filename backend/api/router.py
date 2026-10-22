@@ -2,7 +2,7 @@
 # API 路由总入口
 
 from fastapi import APIRouter
-from backend.api.v1 import auth, qa, exam, resume, interview, unified_chat, llm  # 七个子模块
+from backend.api.v1 import auth, qa, exam, resume, interview, unified_chat, llm, kb  # 八个子模块
 
 api_router = APIRouter()                              # 总路由
 
@@ -14,3 +14,4 @@ api_router.include_router(exam.router,          prefix="/exam",      tags=["试�
 api_router.include_router(resume.router,        prefix="/resume",    tags=["简历审查"])  # 第 4 章
 api_router.include_router(interview.router,     prefix="/interview", tags=["模拟面试"])  # 第 7 章
 api_router.include_router(llm.router,           prefix="/llm",       tags=["模型配置"])  # 模型自由切换
+api_router.include_router(kb.router,            prefix="/kb",        tags=["知识库"])    # 文档上传 → 向量化入库

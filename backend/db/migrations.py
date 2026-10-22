@@ -152,6 +152,35 @@ _MIGRATIONS: list[tuple[str, str]] = [
         ON CONFLICT (agent_type) DO NOTHING
         """,
     ),
+
+    # ── 知识库文档登记表（前端上传 → RAG 入库）────────────────────────
+    # id 同时就是 Milvus 侧的 document_id；chunk 本体存在 Milvus（knowledge_domain），
+    # 这张表只登记「上传过哪些文档、处理到什么状态」，用于列表展示与删除联动。
+    (
+        "kb_documents",
+        """
+        CREATE TABLE IF NOT EXISTS kb_documents (
+            id           UUID PRIMARY KEY,
+            filename     VARCHAR(500) NOT NULL,
+            course_id    VARCHAR(64),
+            tenant_id    VARCHAR(64)  NOT NULL DEFAULT 'tenant_default',
+            size_bytes   BIGINT       NOT NULL DEFAULT 0,
+            chunk_count  INTEGER      NOT NULL DEFAULT 0,
+            use_context  BOOLEAN      NOT NULL DEFAULT FALSE,
+            status       VARCHAR(16)  NOT NULL DEFAULT 'processing'
+                         CHECK (status IN ('processing', 'completed', 'failed')),
+            error_msg    TEXT,
+            uploaded_by  VARCHAR(64),
+            created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+            finished_at  TIMESTAMPTZ
+        )
+        """,
+    ),
+    (
+        "idx_kb_documents_tenant_created",
+        "CREATE INDEX IF NOT EXISTS idx_kb_documents_tenant_created "
+        "ON kb_documents (tenant_id, created_at DESC)",
+    ),
 ]
 
 
